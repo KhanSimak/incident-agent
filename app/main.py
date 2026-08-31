@@ -30,7 +30,8 @@ app.add_middleware(
         "http://127.0.0.1:5500",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "null",                      # frontend opened directly as a file:// URL
+        "null",
+        "https://incident-agent-henna.vercel.app",                     # frontend opened directly as a file:// URL
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
