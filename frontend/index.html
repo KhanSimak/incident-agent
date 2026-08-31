@@ -177,7 +177,7 @@
   <div class="panel">
     <div class="section-title">API</div>
     <label>Backend URL</label>
-    <input id="apiBase" value="http://localhost:8000">
+    <input id="apiBase">
 
     <div class="section-title">New incident</div>
     <label>Description</label>
@@ -252,6 +252,13 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+const DEFAULT_API_BASE =
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+    ? "http://localhost:8000"
+    : "https://incident-agent-mwp3.onrender.com";
+
+$("apiBase").value = DEFAULT_API_BASE;
 let incidents = {};       // incident_id -> last known state (from API responses)
 let currentId = null;
 
