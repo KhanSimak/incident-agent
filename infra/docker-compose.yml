@@ -1,0 +1,61 @@
+# infra/docker-compose.yml
+#
+# Same 4 service names already used throughout fixtures.py/state.py/
+# tools/ — deliberate, so switching from fixture mode to live mode
+# doesn't require renaming anything the agent already knows about.
+#
+# Logs: each service writes structured JSON logs to ./logs/<service>.log
+# (bind-mounted) instead of stdout-only, so tools/logs_live.py can grep
+# real files the same way tools/logs.py filters fixture LogLine objects.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+
+  inventory-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: inventory
+    volumes:
+      - ./services/inventory_service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports: ["5432:5432"]
+
+  payment-service:
+    build: ./services/payment_service
+    environment:
+      FAULT_MODE: "${PAYMENT_FAULT_MODE:-none}"
+    ports: ["8001:8000"]
+    volumes:
+      - ./logs:/var/log/app
+
+  checkout-service:
+    build: ./services/checkout_service
+    environment:
+      FAULT_MODE: "${CHECKOUT_FAULT_MODE:-none}"
+    ports: ["8002:8000"]
+    volumes:
+      - ./logs:/var/log/app
+
+  inventory-service:
+    build: ./services/inventory_service
+    environment:
+      INVENTORY_DB_DSN: "postgresql://postgres:postgres@inventory-db:5432/inventory"
+    depends_on: [inventory-db]
+    ports: ["8003:8000"]
+    volumes:
+      - ./logs:/var/log/app
+
+  cart-service:
+    build: ./services/cart_service
+    environment:
+      INVENTORY_SERVICE_URL: "http://inventory-service:8000"
+    depends_on: [inventory-service]
+    ports: ["8004:8000"]
+    volumes:
+      - ./logs:/var/log/app

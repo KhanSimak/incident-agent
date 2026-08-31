@@ -1,0 +1,26 @@
+# infra/prometheus.yml
+global:
+  scrape_interval: 5s   # short interval — you want enough real data
+                         # points fast for a demo, not production-scale
+                         # 15-30s intervals
+
+scrape_configs:
+  - job_name: "payment-service"
+    static_configs:
+      - targets: ["payment-service:8000"]
+        labels: { service: "payment-service" }
+
+  - job_name: "checkout-service"
+    static_configs:
+      - targets: ["checkout-service:8000"]
+        labels: { service: "checkout-service" }
+
+  - job_name: "inventory-service"
+    static_configs:
+      - targets: ["inventory-service:8000"]
+        labels: { service: "inventory-service" }
+
+  - job_name: "cart-service"
+    static_configs:
+      - targets: ["cart-service:8000"]
+        labels: { service: "cart-service" }
