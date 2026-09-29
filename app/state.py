@@ -31,6 +31,19 @@ class IncidentState(TypedDict):
     severity: str | None                  # "low" | "medium" | "high" | "critical"
     category: str | None                  # "deploy_regression" | "resource_exhaustion" | "downstream_dependency" | "unknown"
     escalate: bool | None                 # False = triage alone is the final answer, no investigation needed
+    affected_service: str | None          # the service the incident is ABOUT, resolved ONCE at triage
+                                          # and then propagated. Every downstream tool target
+                                          # (discover_metrics, query_logs, get_recent_deploys) is
+                                          # validated against this. None = genuinely unknown, which
+                                          # downstream code must treat as "unknown", never as
+                                          # license to substitute an environment name like
+                                          # "production".
+    known_services: list[str]             # service names DISCOVERED for this run (Prometheus
+                                          # `service` label values + live log files, or the
+                                          # scenario's own services in fixture mode). This is
+                                          # what tool targets are validated against, so no
+                                          # service name is ever hardcoded. Empty = nothing
+                                          # discoverable, which callers treat as "unknown".
 
 
     # Accumulated by the Investigation agent's loop

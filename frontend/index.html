@@ -2,577 +2,1024 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Incident Investigation Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2e38;
-    --text: #e4e6eb;
-    --muted: #8a8f9c;
-    --accent: #5b8cff;
-    --good: #3ddc97;
-    --warn: #ffb454;
-    --bad: #ff5f5f;
-    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    --base:    #141821;
+    --surface: #1b2029;
+    --raised:  #222834;
+    --line:    #2b323f;
+    --text:    #dfe4ec;
+    --muted:   #8b95a7;
+    --faint:   #5d6779;
+    --steel:   #6f9ad6;
+    --sage:    #7fb896;
+    --ochre:   #d9a441;
+    --clay:    #cf6b5c;
+
+    --ui: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --code: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+
   * { box-sizing: border-box; }
+  html, body { background: var(--base); }
   body {
-    background: var(--bg);
-    color: var(--text);
     margin: 0;
-    padding: 24px;
+    color: var(--text);
+    font-family: var(--ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
 
-  .layout {
+  /* ── app bar ─────────────────────────────────────────────── */
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .bar h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .bar .where {
+    font-family: var(--code);
+    font-size: 11px;
+    color: var(--muted);
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .bar input {
+    width: 250px;
+    font-family: var(--code);
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: var(--ui);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+    margin: 0;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+  .link-btn:hover { color: var(--text); background: var(--raised); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+  .dot.up { background: var(--sage); }
+  .dot.down { background: var(--clay); }
+
+  /* ── stage rail ──────────────────────────────────────────── */
+  .rail-wrap {
+    padding: 22px 24px 18px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(111,154,214,0.05), transparent 70%), var(--base);
+  }
+  .rail { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
+  .stage {
+    position: relative;
+    padding: 10px 12px 12px;
+    border-top: 2px solid var(--line);
+    transition: border-color .35s ease;
+  }
+  .stage .n { font-family: var(--code); font-size: 10px; color: var(--faint); display: block; }
+  .stage .name { font-size: 13px; font-weight: 500; color: var(--muted); transition: color .35s ease; }
+  .stage .note { font-size: 11px; color: var(--faint); min-height: 15px; margin-top: 2px; font-family: var(--code); }
+  .stage.done    { border-top-color: var(--sage); }
+  .stage.done .name, .stage.active .name, .stage.blocked .name, .stage.failed .name { color: var(--text); }
+  .stage.done .n    { color: var(--sage); }
+  .stage.active  { border-top-color: var(--steel); }
+  .stage.active .n  { color: var(--steel); }
+  .stage.blocked { border-top-color: var(--ochre); }
+  .stage.blocked .n { color: var(--ochre); }
+  .stage.failed  { border-top-color: var(--clay); }
+  .stage.failed .n  { color: var(--clay); }
+
+  .stage.active::after {
+    content: "";
+    position: absolute;
+    top: -2px; left: 0;
+    height: 2px; width: 100%;
+    background: linear-gradient(90deg, var(--steel), transparent);
+    animation: sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes sweep {
+    0%   { opacity: .25; transform: scaleX(.15); transform-origin: left; }
+    50%  { opacity: 1;   transform: scaleX(1);   transform-origin: left; }
+    100% { opacity: .25; transform: scaleX(.15); transform-origin: left; }
+  }
+
+  .ticker {
+    margin-top: 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-family: var(--code);
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .ticker .lead { color: var(--steel); flex-shrink: 0; }
+  .ticker .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ticker .msg.tick { animation: slidein .28s ease; }
+  @keyframes slidein {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── layout ──────────────────────────────────────────────── */
+  .grid {
     display: grid;
-    grid-template-columns: 380px 1fr;
-    gap: 20px;
-    align-items: start;
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 1px;
+    background: var(--line);
+    min-height: calc(100vh - 212px);
   }
+  .col { background: var(--base); padding: 20px 24px 48px; min-width: 0; }
+  .col.side { background: var(--surface); }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
+  h2 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    margin: 26px 0 10px;
   }
+  h2:first-child { margin-top: 0; }
+  .ep {
+    font-family: var(--code);
+    font-weight: 400;
+    font-size: 10px;
+    color: var(--faint);
+    letter-spacing: 0;
+  }
+  h2 .ep { margin-left: 8px; }
 
-  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
   input, select, textarea {
     width: 100%;
-    background: #0f1115;
-    border: 1px solid var(--border);
+    background: var(--base);
+    border: 1px solid var(--line);
     color: var(--text);
-    border-radius: 6px;
-    padding: 8px;
+    border-radius: 5px;
+    padding: 8px 10px;
     font-size: 13px;
+    font-family: var(--ui);
   }
-  textarea { resize: vertical; min-height: 60px; }
+  .col.side input, .col.side select, .col.side textarea { background: #161b23; }
+  input:focus, select:focus, textarea:focus, button:focus-visible, .tab:focus-visible {
+    outline: 2px solid rgba(111,154,214,.6);
+    outline-offset: 1px;
+    border-color: transparent;
+  }
+  textarea { resize: vertical; min-height: 66px; line-height: 1.45; }
 
   button {
-    background: var(--accent);
-    color: white;
+    background: var(--steel);
+    color: #10141b;
     border: none;
-    border-radius: 6px;
+    border-radius: 5px;
     padding: 9px 14px;
     font-size: 13px;
+    font-weight: 600;
+    font-family: var(--ui);
     cursor: pointer;
-    margin-top: 6px;
   }
-  button:hover { opacity: 0.9; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.secondary { background: #2a2e38; }
-  button.danger { background: var(--bad); }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+  button.ghost:hover:not(:disabled) { border-color: var(--steel); filter: none; }
+  button.danger { background: transparent; color: var(--clay); border: 1px solid rgba(207,107,92,.45); font-weight: 500; }
+  button.danger:hover:not(:disabled) { background: rgba(207,107,92,.1); filter: none; }
+  button.wide { width: 100%; margin-top: 12px; }
 
-  .row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .row button { flex: 1; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .with-ep { flex: 1 1 140px; display: flex; flex-direction: column; gap: 3px; }
+  .with-ep button { width: 100%; }
+  .with-ep .ep { text-align: center; font-size: 9.5px; }
 
   .badge {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: 2px 9px;
+    border-radius: 3px;
+    font-family: var(--code);
     font-size: 11px;
-    font-weight: 600;
+    border: 1px solid;
   }
-  .badge.good { background: rgba(61,220,151,0.15); color: var(--good); }
-  .badge.warn { background: rgba(255,180,84,0.15); color: var(--warn); }
-  .badge.bad  { background: rgba(255,95,95,0.15);  color: var(--bad); }
-  .badge.neutral { background: rgba(138,143,156,0.15); color: var(--muted); }
+  .badge.good    { color: var(--sage);  border-color: rgba(127,184,150,.4); background: rgba(127,184,150,.1); }
+  .badge.warn    { color: var(--ochre); border-color: rgba(217,164,65,.4);  background: rgba(217,164,65,.1); }
+  .badge.bad     { color: var(--clay);  border-color: rgba(207,107,92,.4);  background: rgba(207,107,92,.1); }
+  .badge.neutral { color: var(--muted); border-color: var(--line);          background: var(--raised); }
 
-  .field { margin-bottom: 10px; font-size: 13px; }
-  .field .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .field .v { margin-top: 2px; }
-
-  .evidence-item {
-    border-left: 2px solid var(--border);
-    padding: 6px 10px;
-    margin-bottom: 6px;
-    font-size: 12px;
+  /* ── verdict ─────────────────────────────────────────────── */
+  .verdict {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--steel);
+    border-radius: 0 6px 6px 0;
+    padding: 18px 20px;
+    background: var(--surface);
   }
-  .evidence-item.cited { border-left-color: var(--accent); background: rgba(91,140,255,0.06); }
-  .evidence-item .tool { color: var(--accent); font-weight: 600; }
-  .evidence-item .summary { color: var(--muted); margin-top: 2px; }
+  .verdict .case { font-family: var(--code); font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .verdict .hyp { font-size: 17px; line-height: 1.45; font-weight: 500; letter-spacing: -0.01em; max-width: 68ch; }
+  .verdict .ground { margin-top: 10px; font-size: 12.5px; color: var(--muted); max-width: 72ch; }
+
+  .metrics {
+    display: flex; flex-wrap: wrap; gap: 26px;
+    margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
+  }
+  .metric .mv { font-family: var(--code); font-size: 19px; color: var(--text); line-height: 1.2; }
+  .metric .mv small { color: var(--faint); font-size: 14px; }
+  .metric .ml { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .meter { width: 108px; height: 3px; background: var(--line); border-radius: 2px; margin-top: 7px; overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 2px; }
+
+  /* ── evidence ────────────────────────────────────────────── */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--muted); font-size: 12.5px; font-weight: 500;
+    padding: 7px 12px; cursor: pointer; border-radius: 0;
+  }
+  .tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--steel); }
+  .tab:hover { color: var(--text); filter: none; }
+  .tab .ct { font-family: var(--code); font-size: 10.5px; color: var(--faint); margin-left: 5px; }
+
+  .ev { border: 1px solid var(--line); border-radius: 5px; padding: 11px 13px; margin-bottom: 7px; background: var(--surface); }
+  .ev.cited { border-color: rgba(111,154,214,.4); background: rgba(111,154,214,.05); }
+  .ev-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ev-head .ix { font-family: var(--code); font-size: 11px; color: var(--faint); }
+  .ev-head .tool { font-family: var(--code); font-size: 12px; color: var(--steel); }
+  .ev-head .sig { font-family: var(--code); font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid; margin-left: auto; }
+  .sig.positive { color: var(--sage);  border-color: rgba(127,184,150,.35); }
+  .sig.negative { color: var(--ochre); border-color: rgba(217,164,65,.3); }
+  .sig.neutral  { color: var(--faint); border-color: var(--line); }
+  .ev .q {
+    font-family: var(--code); font-size: 11.5px; color: var(--text);
+    background: var(--base); border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px 8px; overflow-x: auto; white-space: pre;
+  }
+  .ev .rs { font-size: 12.5px; color: var(--muted); margin-top: 7px; max-width: 80ch; }
+
+  .kv { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 5px 16px; font-size: 13px; margin: 0; }
+  .kv dt { color: var(--muted); font-size: 12px; }
+  .kv dd { margin: 0; min-width: 0; }
+  .kv dd.mono { font-family: var(--code); font-size: 12px; }
 
   pre {
-    background: #0f1115;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px;
-    font-size: 11px;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
+    font-family: var(--code); font-size: 11.5px; line-height: 1.55;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 5px;
+    padding: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0;
   }
 
-  .empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
-  .section-title { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--text); }
-  .error-box {
-    background: rgba(255,95,95,0.1);
-    border: 1px solid var(--bad);
-    color: var(--bad);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 12px;
-    margin-top: 10px;
+  .rule {
+    border: 1px solid var(--line); border-left: 2px solid var(--ochre);
+    border-radius: 0 5px 5px 0; padding: 10px 13px; margin-bottom: 7px; background: var(--surface);
+  }
+  .rule .expr { font-family: var(--code); font-size: 12px; color: var(--text); }
+  .rule .why { font-size: 12px; color: var(--muted); margin-top: 5px; max-width: 78ch; }
+
+  .case-item {
+    display: block; width: 100%; text-align: left;
+    background: none; border: 1px solid var(--line); border-radius: 5px;
+    padding: 9px 11px; margin-bottom: 6px; cursor: pointer;
+    font-weight: 400; color: var(--text); font-family: var(--ui);
+  }
+  .case-item:hover { border-color: var(--faint); filter: none; }
+  .case-item[aria-current="true"] { border-color: var(--steel); background: rgba(111,154,214,.07); }
+  .case-item .cid { font-family: var(--code); font-size: 11px; color: var(--steel); }
+  .case-item .cd {
+    font-size: 12px; color: var(--muted); margin-top: 3px;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;  -webkit-box-orient: vertical; overflow: hidden;
   }
 
-  /* live investigation ticker */
-  .live-status {
-    display: none;
-    align-items: center;
-    gap: 8px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin-top: 10px;
-    font-size: 13px;
+  .log { max-height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: 5px; }
+  .log .ln {
+    font-family: var(--code); font-size: 11px; color: var(--muted);
+    padding: 6px 10px; border-bottom: 1px solid var(--line); word-break: break-word;
   }
-  .live-status.active { display: flex; }
-  .pulse-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--accent);
-    animation: pulse 1.1s infinite;
-    flex-shrink: 0;
+  .log .ln:last-child { border-bottom: none; }
+  .log .verb { color: var(--steel); }
+  .log .ok { color: var(--sage); }
+  .log .err { color: var(--clay); }
+  .log .ms { color: var(--faint); }
+
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 7px; font-family: var(--code); }
+  .note.err { color: var(--clay); }
+
+  .warnbox {
+    border: 1px solid rgba(217,164,65,.35); background: rgba(217,164,65,.07);
+    border-radius: 5px; padding: 9px 11px; font-size: 12px; color: var(--ochre); margin-bottom: 12px;
   }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(91,140,255,0.6); }
-    70% { box-shadow: 0 0 0 8px rgba(91,140,255,0); }
-    100% { box-shadow: 0 0 0 0 rgba(91,140,255,0); }
-  }
-  .live-status .line {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    animation: fadein 0.25s ease;
-  }
-  @keyframes fadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
-  .live-log {
-    max-height: 160px; overflow-y: auto; margin-top: 8px;
-    display: none;
-  }
-  .live-log.active { display: block; }
-  .live-log .entry {
-    font-size: 11px; color: var(--muted); padding: 3px 0;
-    border-bottom: 1px solid var(--border);
+  .errbox {
+    border: 1px solid rgba(207,107,92,.45); background: rgba(207,107,92,.08);
+    border-radius: 5px; padding: 9px 11px; font-size: 12.5px; color: var(--clay); margin-top: 10px;
   }
 
-  /* fault-injection demo panel */
-  .demo-panel { margin-top: 20px; }
-  .demo-panel .tag {
-    font-size: 10px; color: var(--warn); border: 1px solid var(--warn);
-    border-radius: 4px; padding: 1px 6px; margin-left: 6px;
+  .blank { border: 1px dashed var(--line); border-radius: 6px; padding: 30px 24px; color: var(--muted); font-size: 13px; max-width: 62ch; }
+  .blank b { display: block; color: var(--text); font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+  .blank code { font-family: var(--code); font-size: 12px; color: var(--steel); }
+
+  .none { color: var(--faint); font-size: 12.5px; padding: 6px 0; }
+
+  details summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 6px 0; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▸ "; color: var(--faint); }
+  details[open] summary::before { content: "▾ "; }
+  details summary:hover { color: var(--text); }
+
+  .factors { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; max-width: 76ch; }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+    .rail { grid-template-columns: repeat(3, 1fr); row-gap: 10px; }
+    .bar { flex-wrap: wrap; }
+    .bar .where { margin-left: 0; width: 100%; }
+    .bar input { flex: 1; width: auto; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::after { animation: none !important; transition: none !important; }
   }
 </style>
 </head>
 <body>
 
-<h1>Incident Investigation Agent</h1>
-<div class="sub">Phase 1–3 dashboard — triage, investigation, remediation, approval, execution, verification</div>
+<header class="bar">
+  <h1>Incident Investigation Agent</h1>
+  <button class="link-btn" id="btnHelp">Endpoint reference</button>
+  <div class="where">
+    <span class="dot" id="healthDot" title="backend reachability"></span>
+    <input id="apiBase" spellcheck="false" aria-label="Backend URL">
+  </div>
+</header>
 
-<div class="layout">
+<div class="rail-wrap">
+  <div class="rail" id="rail"></div>
+  <div class="ticker">
+    <span class="lead" id="tickLead">idle</span>
+    <span class="msg" id="tickMsg">Report an incident to start an investigation.</span>
+  </div>
+</div>
 
-  <!-- LEFT: incident creation + settings -->
-  <div class="panel">
-    <div class="section-title">API</div>
-    <label>Backend URL</label>
-    <input id="apiBase">
+<div class="grid">
 
-    <div class="section-title">New incident</div>
-    <label>Description</label>
+  <div class="col side">
+    <h2>Report an incident <span class="ep">GET /incidents/stream</span></h2>
+
+    <label for="description">What's happening</label>
     <textarea id="description" placeholder="checkout-service memory usage climbing"></textarea>
 
-    <label>Data source</label>
+    <label for="dataSource">Data source</label>
     <select id="dataSource">
-      <option value="live">live (real Docker/Prometheus)</option>
-      <option value="fixture">fixture</option>
+      <option value="live">Live — Docker + Prometheus</option>
+      <option value="fixture">Fixture — recorded scenario</option>
     </select>
 
-    <div id="scenarioWrap" style="display:none">
-      <label>Scenario ID</label>
+    <div id="scenarioWrap" hidden>
+      <label for="scenarioId">Scenario <span class="ep">GET /scenarios</span></label>
       <select id="scenarioId"></select>
     </div>
 
-    <button id="submitBtn" style="width:100%">Report incident</button>
+    <button id="submitBtn" class="wide">Start investigation</button>
     <div id="submitError"></div>
 
-    <div class="live-status" id="liveStatus">
-      <div class="pulse-dot"></div>
-      <div class="line" id="liveLine">Starting investigation...</div>
-    </div>
-    <div class="live-log" id="liveLog"></div>
+    <h2>Cases this session</h2>
+    <div id="caseList"><div class="none">No investigations yet.</div></div>
 
-    <div class="section-title">Recent incidents (this session)</div>
-    <div id="incidentList" class="empty">None yet</div>
+    <h2>Fault lab <span class="ep">POST /admin/*</span></h2>
+    <div class="warnbox">Mutates real containers. Token-gated — everything else on this page is open.</div>
+
+    <label for="adminToken">Admin token</label>
+    <input id="adminToken" type="password" placeholder="required for this section only">
+
+    <label for="faultService">Service</label>
+    <select id="faultService">
+      <option value="checkout-service">checkout-service</option>
+      <option value="payment-service">payment-service</option>
+    </select>
+
+    <label for="faultMode">Fault mode</label>
+    <select id="faultMode">
+      <option value="none">none — reset to healthy</option>
+      <option value="memory_leak">memory_leak</option>
+      <option value="pool_leak">pool_leak</option>
+      <option value="fd_leak">fd_leak</option>
+      <option value="cpu_saturation">cpu_saturation</option>
+      <option value="bad_deploy">bad_deploy</option>
+    </select>
+
+    <button id="btnInjectFault" class="ghost wide">Apply and recreate container</button>
+    <div class="note" id="injectStatus"></div>
+
+    <label for="trafficCount">Requests to send</label>
+    <input id="trafficCount" type="number" value="50" min="1" max="500">
+    <button id="btnGenTraffic" class="ghost wide">Send traffic</button>
+    <div class="note" id="trafficStatus"></div>
   </div>
 
-  <!-- RIGHT: incident detail -->
-  <div class="panel" id="detailPanel">
-    <div class="empty">Report an incident, or select one on the left, to see details here.</div>
-  </div>
-
-</div>
-
-<!-- FULL-WIDTH: fault-injection demo panel (below the 2-column layout, not a 3rd grid cell) -->
-<div class="panel demo-panel">
-  <div class="section-title">Fault injection <span class="tag">demo only</span></div>
-
-  <label>Admin token</label>
-  <input id="adminToken" type="password" placeholder="only needed for fault injection / traffic">
-
-  <div class="row" style="margin-top:10px">
-    <div style="flex:1">
-      <label>Service</label>
-      <select id="faultService">
-        <option value="checkout-service">checkout-service</option>
-        <option value="payment-service">payment-service</option>
-      </select>
-    </div>
-    <div style="flex:1">
-      <label>Fault mode</label>
-      <select id="faultMode">
-        <option value="none">none (reset)</option>
-        <option value="memory_leak">memory_leak</option>
-        <option value="pool_leak">pool_leak</option>
-        <option value="fd_leak">fd_leak</option>
-        <option value="cpu_saturation">cpu_saturation</option>
-        <option value="bad_deploy">bad_deploy</option>
-      </select>
+  <div class="col" id="detail">
+    <div class="blank">
+      <b>No case selected</b>
+      Describe an incident on the left and start an investigation. The pipeline above
+      advances live as the agent discovers metrics, queries logs, and reaches a verdict.
+      <br><br>
+      To watch it against a real fault: set <code>memory_leak</code> in the fault lab,
+      send traffic, then report it.
     </div>
   </div>
-  <button id="btnInjectFault" style="width:100%">Inject / recreate container</button>
-  <div id="injectStatus" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
 
-  <label style="margin-top:14px">Traffic (requests to trigger the fault)</label>
-  <input id="trafficCount" type="number" value="50" min="1" max="500">
-  <button id="btnGenTraffic" class="secondary" style="width:100%">Send traffic</button>
-  <div id="trafficStatus" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+
 const DEFAULT_API_BASE =
-  window.location.hostname === "localhost" ||
-  window.location.hostname === "127.0.0.1"
+  (location.hostname === "localhost" || location.hostname === "127.0.0.1")
     ? "http://localhost:8000"
     : "https://incident-agent-mwp3.onrender.com";
 
 $("apiBase").value = DEFAULT_API_BASE;
-let incidents = {};       // incident_id -> last known state (from API responses)
+const apiBase = () => $("apiBase").value.replace(/\/$/, "");
+
+let incidents = {};
 let currentId = null;
+let evidenceTab = "cited";
+let reqLog = [];
 
-function apiBase() { return $("apiBase").value.replace(/\/$/, ""); }
+/* ── every call is recorded, so the API surface is visible in the UI ── */
+async function call(path, { method = "GET", body, admin = false } = {}) {
+  const t0 = performance.now();
+  const headers = { "Content-Type": "application/json" };
+  if (admin) headers["X-Admin-Token"] = $("adminToken").value;
 
-async function api(path, options = {}) {
-  const res = await fetch(apiBase() + path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body.detail || `${res.status} ${res.statusText}`);
+  let status = 0;
+  try {
+    const res = await fetch(apiBase() + path, {
+      method, headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    status = res.status;
+    const data = await res.json().catch(() => ({}));
+    logReq(method, path, status, performance.now() - t0);
+    if (!res.ok) throw new Error(data.detail || `${res.status} ${res.statusText}`);
+    return data;
+  } catch (e) {
+    if (!status) logReq(method, path, "ERR", performance.now() - t0);
+    throw e;
   }
-  return body;
 }
 
-// Same as api(), plus the X-Admin-Token header — used only by the
-// fault-injection demo endpoints, which the backend gates with
-// require_admin_token(). Every other endpoint uses plain api() and
-// needs no token at all.
-async function adminApi(path, options = {}) {
-  const res = await fetch(apiBase() + path, {
-    headers: {
-      "Content-Type": "application/json",
-      "X-Admin-Token": $("adminToken").value,
-    },
-    ...options,
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body.detail || `${res.status} ${res.statusText}`);
+function logReq(method, path, status, ms) {
+  reqLog.unshift({ method, path, status, ms: Math.round(ms) });
+  reqLog = reqLog.slice(0, 40);
+  const el = $("reqLog");
+  if (el) el.innerHTML = renderReqLog();
+}
+
+function renderReqLog() {
+  if (!reqLog.length) return `<div class="ln">No requests yet.</div>`;
+  return reqLog.map(r => {
+    const cls = (r.status === "ERR" || r.status >= 400) ? "err" : "ok";
+    return `<div class="ln"><span class="verb">${r.method}</span> ${escapeHtml(r.path)}
+      <span class="${cls}">${r.status}</span> <span class="ms">${r.ms}ms</span></div>`;
+  }).join("");
+}
+
+async function probeHealth() {
+  const dot = $("healthDot");
+  try {
+    await fetch(apiBase() + "/scenarios");
+    dot.className = "dot up";
+    dot.title = "backend reachable";
+  } catch {
+    dot.className = "dot down";
+    dot.title = "backend unreachable";
   }
-  return body;
+}
+probeHealth();
+$("apiBase").addEventListener("change", probeHealth);
+
+/* ── pipeline rail ── */
+const STAGES = [
+  { key: "triage",   name: "Triage" },
+  { key: "invest",   name: "Investigate" },
+  { key: "diagnose", name: "Diagnose" },
+  { key: "approve",  name: "Approve" },
+  { key: "execute",  name: "Execute" },
+  { key: "verify",   name: "Verify" },
+];
+
+function renderRail(state = {}, live = null) {
+  $("rail").innerHTML = STAGES.map((s, i) => {
+    const st = stageStatus(s.key, state, live);
+    return `<div class="stage ${st.cls}">
+      <span class="n">${String(i + 1).padStart(2, "0")}</span>
+      <div class="name">${s.name}</div>
+      <div class="note">${escapeHtml(st.note)}</div>
+    </div>`;
+  }).join("");
 }
 
-function badge(text, kind) {
-  return `<span class="badge ${kind}">${text}</span>`;
+function stageStatus(key, s, live) {
+  if (live) {
+    if (key === "triage")
+      return live.stage === "triage" ? { cls: "active", note: "assessing" } : { cls: "done", note: "" };
+    if (key === "invest") {
+      if (live.stage === "triage") return { cls: "", note: "" };
+      const n = `${live.tools} tool call${live.tools === 1 ? "" : "s"}`;
+      return live.stage === "invest" ? { cls: "active", note: n } : { cls: "done", note: n };
+    }
+    if (key === "diagnose")
+      return live.stage === "diagnose" ? { cls: "active", note: "synthesising" } : { cls: "", note: "" };
+    return { cls: "", note: "" };
+  }
+
+  switch (key) {
+    case "triage":
+      return s.triage?.severity
+        ? { cls: "done", note: `${s.triage.severity} · ${s.triage.category ?? "—"}` }
+        : { cls: "", note: "" };
+    case "invest": {
+      const n = (s.full_evidence_gathered || []).length;
+      return n ? { cls: "done", note: `${n} evidence item${n === 1 ? "" : "s"}` } : { cls: "", note: "" };
+    }
+    case "diagnose":
+      return s.root_cause_hypothesis
+        ? { cls: "done", note: s.confidence != null ? `confidence ${s.confidence.toFixed(2)}` : "" }
+        : { cls: "", note: "" };
+    case "approve":
+      if (s.approval_status === "approved")     return { cls: "done",    note: "approved" };
+      if (s.approval_status === "rejected")     return { cls: "failed",  note: "rejected" };
+      if (s.approval_status === "pending")      return { cls: "blocked", note: "awaiting human" };
+      if (s.approval_status === "not_required") return { cls: "done",    note: "not required" };
+      return { cls: "", note: "" };
+    case "execute":
+      if (s.execution_status === "succeeded") return { cls: "done",   note: s.remediation_action_type ?? "" };
+      if (s.execution_status === "failed")    return { cls: "failed", note: "failed" };
+      if (!s.remediation_action_type && s.root_cause_hypothesis)
+        return { cls: "", note: "no automated action" };
+      return { cls: "", note: "" };
+    case "verify": {
+      const v = s.verification_result?.overall_status;
+      if (v === "resolved")        return { cls: "done",    note: "resolved" };
+      if (v === "still_anomalous") return { cls: "failed",  note: "still anomalous" };
+      if (v)                       return { cls: "blocked", note: v.replace(/_/g, " ") };
+      return { cls: "", note: "" };
+    }
+  }
+  return { cls: "", note: "" };
 }
 
-function riskBadge(risk) {
-  if (risk === "auto_apply_safe") return badge(risk, "good");
-  if (risk === "needs_approval") return badge(risk, "warn");
-  if (risk === "do_not_apply") return badge(risk, "bad");
-  return badge(risk ?? "—", "neutral");
+function tick(lead, msg, animate = true) {
+  $("tickLead").textContent = lead;
+  const el = $("tickMsg");
+  el.textContent = msg;
+  if (animate) {
+    el.classList.remove("tick");
+    void el.offsetWidth;
+    el.classList.add("tick");
+  }
 }
 
-function approvalBadge(status) {
-  if (status === "approved") return badge(status, "good");
-  if (status === "rejected") return badge(status, "bad");
-  if (status === "pending") return badge(status, "warn");
-  return badge(status ?? "not_required", "neutral");
-}
+renderRail();
 
-function execBadge(status) {
-  if (status === "succeeded") return badge(status, "good");
-  if (status === "failed") return badge(status, "bad");
-  return badge(status ?? "not_executed", "neutral");
-}
+/* ── badges ── */
+const badge = (t, k) => `<span class="badge ${k}">${escapeHtml(String(t))}</span>`;
+const riskBadge = r =>
+  r === "auto_apply_safe" ? badge(r, "good") :
+  r === "needs_approval"  ? badge(r, "warn") :
+  r === "do_not_apply"    ? badge(r, "bad")  : badge(r ?? "—", "neutral");
+const approvalBadge = s =>
+  s === "approved" ? badge(s, "good") :
+  s === "rejected" ? badge(s, "bad")  :
+  s === "pending"  ? badge(s, "warn") : badge(s ?? "not_required", "neutral");
+const execBadge = s =>
+  s === "succeeded" ? badge(s, "good") :
+  s === "failed"    ? badge(s, "bad")  : badge(s ?? "not_executed", "neutral");
+const verifyBadge = v =>
+  v === "resolved"        ? badge(v, "good") :
+  v === "still_anomalous" ? badge(v, "bad")  :
+  v ? badge(v, "warn") : badge("not run", "neutral");
 
-// ---------- data source toggle ----------
+/* ── data source toggle ── */
 $("dataSource").addEventListener("change", async () => {
   const live = $("dataSource").value === "live";
-  $("scenarioWrap").style.display = live ? "none" : "block";
-  if (!live) {
-    try {
-      const scenarios = await api("/scenarios");
-      $("scenarioId").innerHTML = Object.entries(scenarios)
-        .map(([id, s]) => `<option value="${id}">${id} — ${s.primary_service}</option>`)
-        .join("");
-    } catch (e) {
-      $("scenarioId").innerHTML = `<option value="">(could not load scenarios)</option>`;
-    }
+  $("scenarioWrap").hidden = live;
+  if (live) return;
+  try {
+    const scenarios = await call("/scenarios");
+    $("scenarioId").innerHTML = Object.entries(scenarios)
+      .map(([id, s]) => `<option value="${id}">${id} — ${s.primary_service}</option>`)
+      .join("");
+  } catch {
+    $("scenarioId").innerHTML = `<option value="">Could not load scenarios</option>`;
   }
 });
 
-// ---------- create incident (live streaming) ----------
+/* ── start investigation (SSE) ── */
 $("submitBtn").addEventListener("click", () => {
   $("submitError").innerHTML = "";
   const description = $("description").value.trim();
-  if (!description) return;
+  if (!description) {
+    $("submitError").innerHTML = `<div class="errbox">Describe the incident first.</div>`;
+    return;
+  }
 
-  const live = $("dataSource").value === "live";
+  const fixture = $("dataSource").value === "fixture";
   const params = new URLSearchParams({ description });
-  if (!live) params.set("scenario_id", $("scenarioId").value);
+  if (fixture) params.set("scenario_id", $("scenarioId").value);
+
+  const live = { stage: "triage", tools: 0 };
 
   $("submitBtn").disabled = true;
-  $("submitBtn").textContent = "Investigating...";
-  $("liveStatus").classList.add("active");
-  $("liveLog").classList.add("active");
-  $("liveLog").innerHTML = "";
-  $("liveLine").textContent = "Starting investigation...";
+  $("submitBtn").textContent = "Investigating…";
+  renderRail({}, live);
+  tick("running", "Triaging the report…");
+  logReq("GET", "/incidents/stream", "SSE", 0);
 
-  const es = new EventSource(`${apiBase()}/incidents/stream?${params.toString()}`);
+  const es = new EventSource(`${apiBase()}/incidents/stream?${params}`);
 
   es.addEventListener("trace", (e) => {
     const { message } = JSON.parse(e.data);
-    $("liveLine").textContent = message;
-    $("liveLine").classList.remove("line");
-    void $("liveLine").offsetWidth; // restart the fade-in animation
-    $("liveLine").classList.add("line");
 
-    const entry = document.createElement("div");
-    entry.className = "entry";
-    entry.textContent = message;
-    $("liveLog").prepend(entry);
+    if (/^Thought:/.test(message)) { live.stage = "invest"; live.tools += 1; }
+    else if (/^Observation:|^Validator:/.test(message)) live.stage = "invest";
+    if (/->\s*Action:\s*answer/.test(message) || /^Response:/.test(message)) live.stage = "diagnose";
+
+    renderRail({}, live);
+    tick(live.stage === "invest" ? "investigating" : "diagnosing", message);
   });
 
   es.addEventListener("done", (e) => {
     const result = JSON.parse(e.data);
     incidents[result.incident_id] = result;
     currentId = result.incident_id;
-    renderIncidentList();
+    evidenceTab = "cited";
+    renderCaseList();
     renderDetail(result);
-
+    tick("complete", result.root_cause_hypothesis || "Investigation finished.");
     es.close();
-    $("submitBtn").disabled = false;
-    $("submitBtn").textContent = "Report incident";
-    $("liveStatus").classList.remove("active");
+    resetSubmit();
   });
 
   es.onerror = () => {
-    $("submitError").innerHTML = `<div class="error-box">Stream connection failed or closed unexpectedly.</div>`;
+    $("submitError").innerHTML =
+      `<div class="errbox">Stream closed before the investigation finished. Check the backend is running at the URL above.</div>`;
+    tick("stopped", "Stream closed unexpectedly.");
     es.close();
-    $("submitBtn").disabled = false;
-    $("submitBtn").textContent = "Report incident";
-    $("liveStatus").classList.remove("active");
+    resetSubmit();
+    probeHealth();
   };
 });
 
-// ---------- fault injection (demo panel, admin-token gated) ----------
+function resetSubmit() {
+  $("submitBtn").disabled = false;
+  $("submitBtn").textContent = "Start investigation";
+}
+
+/* ── fault lab ── */
 $("btnInjectFault").addEventListener("click", async () => {
-  $("injectStatus").textContent = "Applying...";
+  const el = $("injectStatus");
+  el.className = "note";
+  el.textContent = "Recreating container…";
   try {
-    const result = await adminApi("/admin/inject_fault", {
-      method: "POST",
-      body: JSON.stringify({
-        service: $("faultService").value,
-        fault_mode: $("faultMode").value,
-      }),
+    const r = await call("/admin/inject_fault", {
+      method: "POST", admin: true,
+      body: { service: $("faultService").value, fault_mode: $("faultMode").value },
     });
-    $("injectStatus").textContent = result.ok
-      ? `Container recreated with FAULT_MODE=${result.fault_mode}`
-      : `Failed: ${result.detail}`;
+    el.textContent = r.ok ? `${r.service} now running FAULT_MODE=${r.fault_mode}` : `Did not apply: ${r.detail}`;
+    if (!r.ok) el.className = "note err";
   } catch (e) {
-    $("injectStatus").textContent = `Error: ${e.message}`;
+    el.className = "note err";
+    el.textContent = e.message;
   }
 });
 
 $("btnGenTraffic").addEventListener("click", async () => {
+  const el = $("trafficStatus");
   const count = parseInt($("trafficCount").value, 10) || 50;
-  $("trafficStatus").textContent = `Sending ${count} requests...`;
+  el.className = "note";
+  el.textContent = `Sending ${count} requests…`;
   try {
-    const result = await adminApi("/admin/generate_traffic", {
-      method: "POST",
-      body: JSON.stringify({ service: $("faultService").value, count }),
+    const r = await call("/admin/generate_traffic", {
+      method: "POST", admin: true,
+      body: { service: $("faultService").value, count },
     });
-    $("trafficStatus").textContent = `${result.succeeded}/${result.requested} succeeded`;
+    el.textContent = `${r.succeeded}/${r.requested} succeeded${r.failed ? `, ${r.failed} failed` : ""}`;
   } catch (e) {
-    $("trafficStatus").textContent = `Error: ${e.message}`;
+    el.className = "note err";
+    el.textContent = e.message;
   }
 });
 
-// ---------- incident list ----------
-function renderIncidentList() {
+/* ── case list ── */
+function renderCaseList() {
   const ids = Object.keys(incidents);
-  if (ids.length === 0) {
-    $("incidentList").innerHTML = `<div class="empty">None yet</div>`;
+  if (!ids.length) {
+    $("caseList").innerHTML = `<div class="none">No investigations yet.</div>`;
     return;
   }
-  $("incidentList").className = "";
-  $("incidentList").innerHTML = ids.map(id => {
+  $("caseList").innerHTML = ids.map(id => {
     const inc = incidents[id];
-    const active = id === currentId ? "style='border-color:var(--accent)'" : "";
-    return `
-      <div class="evidence-item" ${active} style="cursor:pointer" data-id="${id}">
-        <div class="tool">${id}</div>
-        <div class="summary">${(inc.root_cause_hypothesis || "investigating...").slice(0, 60)}</div>
-      </div>`;
+    return `<button class="case-item" data-id="${id}" aria-current="${id === currentId}">
+      <span class="cid">${escapeHtml(id)}</span>
+      <div class="cd">${escapeHtml(inc.root_cause_hypothesis || inc.description || "in progress")}</div>
+    </button>`;
   }).join("");
 
-  document.querySelectorAll("#incidentList [data-id]").forEach(el => {
+  $("caseList").querySelectorAll("[data-id]").forEach(el => {
     el.addEventListener("click", () => {
       currentId = el.dataset.id;
-      renderIncidentList();
+      evidenceTab = "cited";
+      renderCaseList();
       renderDetail(incidents[currentId]);
     });
   });
 }
 
-// ---------- detail panel ----------
-function field(k, v) {
-  return `<div class="field"><div class="k">${k}</div><div class="v">${v}</div></div>`;
-}
+/* ── case file ── */
+function renderDetail(s) {
+  const id = s.incident_id;
+  const all = s.full_evidence_gathered || s.evidence || [];
+  const cited = s.cited_evidence || [];
+  const evList = evidenceTab === "cited" ? cited : all;
 
-function renderDetail(state) {
-  const id = state.incident_id;
-  const evidence = state.full_evidence_gathered || state.evidence || [];
+  const evHtml = evList.length
+    ? evList.map(e => {
+        const ix = all.findIndex(x => x.tool === e.tool && x.query === e.query);
+        const isCited = cited.some(c => c.tool === e.tool && c.query === e.query);
+        return evCard(e, ix, isCited);
+      }).join("")
+    : `<div class="none">${evidenceTab === "cited"
+        ? "The hypothesis cites no evidence — confidence is capped accordingly."
+        : "No evidence gathered."}</div>`;
 
-  const evidenceHtml = evidence.map((e, i) => {
-    const cited = state.cited_evidence && state.cited_evidence.some(c => c.query === e.query && c.tool === e.tool);
-    return `
-      <div class="evidence-item ${cited ? "cited" : ""}">
-        <div class="tool">[${i}] ${e.tool}</div>
-        <div>${escapeHtml(e.query)}</div>
-        <div class="summary">${escapeHtml(e.result_summary || "")}</div>
-      </div>`;
-  }).join("") || `<div class="empty">No evidence gathered</div>`;
+  const rules = s.suggested_alert_rules || [];
+  const br = s.blast_radius;
 
-  const alertRules = (state.suggested_alert_rules || []).map(r => `
-    <div class="evidence-item">
-      <div class="tool">${escapeHtml(r.metric)}</div>
-      <div>${escapeHtml(r.expr)}  for: ${r.for}</div>
-      <div class="summary">${escapeHtml(r.rationale)}</div>
-    </div>`).join("") || `<div class="empty">None proposed</div>`;
+  renderRail(s);
 
-  $("detailPanel").innerHTML = `
-    <div class="section-title">Incident ${id}</div>
+  $("detail").innerHTML = `
+    <div class="verdict">
+      <div class="case">case ${escapeHtml(id)} · ${escapeHtml(s.description || "")}</div>
+      <div class="hyp">${escapeHtml(s.root_cause_hypothesis || "No root cause established.")}</div>
+      ${s.groundedness_reason ? `<div class="ground">Groundedness check: ${escapeHtml(s.groundedness_reason)}</div>` : ""}
 
-    ${field("Severity / Category", `${state.triage?.severity ?? "—"} / ${state.triage?.category ?? "—"}`)}
-    ${field("Root cause hypothesis", escapeHtml(state.root_cause_hypothesis ?? "—"))}
-    ${field("Confidence", state.confidence != null ? state.confidence.toFixed(2) : "—")}
-    ${field("Recommended action", escapeHtml(state.recommended_action ?? "—"))}
-    ${field("Risk category", riskBadge(state.risk_category))}
-    ${field("Approval status", approvalBadge(state.approval_status))}
-    ${field("Remediation action type", state.remediation_action_type ?? "— (no automated action available)")}
-    ${field("Execution status", execBadge(state.execution_status))}
-    ${state.execution_detail ? field("Execution detail", `<pre>${escapeHtml(state.execution_detail)}</pre>`) : ""}
-    ${state.verification_result ? field("Verification", `<pre>${escapeHtml(JSON.stringify(state.verification_result, null, 2))}</pre>`) : ""}
-
-    <div class="section-title">Actions</div>
-    <div class="row">
-      <button id="btnApprove" class="secondary" ${state.approval_status !== "pending" ? "disabled" : ""}>Approve</button>
-      <button id="btnReject" class="danger" ${state.approval_status !== "pending" ? "disabled" : ""}>Reject</button>
+      <div class="metrics">
+        <div class="metric">
+          <div class="mv">${s.confidence != null ? s.confidence.toFixed(2) : "—"}</div>
+          <div class="ml">Confidence</div>
+          ${s.confidence != null ? meter(s.confidence, confColor(s.confidence)) : ""}
+        </div>
+        ${br ? `<div class="metric">
+          <div class="mv">${br.score ?? "—"}</div>
+          <div class="ml">Blast radius · ${escapeHtml(br.category ?? "—")}</div>
+          ${br.score != null ? meter(br.score, brColor(br.category)) : ""}
+        </div>` : ""}
+        <div class="metric">
+          <div class="mv">${all.length}<small>/${cited.length} cited</small></div>
+          <div class="ml">Evidence gathered</div>
+        </div>
+        <div class="metric">
+          <div class="mv">${s.iterations ?? "—"}<small>/8</small></div>
+          <div class="ml">Loop iterations</div>
+        </div>
+      </div>
     </div>
-    <div class="row">
-      <button id="btnExecute" class="secondary" ${state.approval_status !== "approved" || !state.remediation_action_type ? "disabled" : ""}>Execute</button>
-      <button id="btnVerify" class="secondary" ${state.approval_status !== "approved" ? "disabled" : ""}>Verify</button>
-      <button id="btnExport" class="secondary">Export scenario</button>
+
+    ${br?.factors?.length ? `
+      <h2>Why this blast radius</h2>
+      <ul class="factors">${br.factors.map(f => `<li>${escapeHtml(f)}</li>`).join("")}</ul>` : ""}
+
+    <h2>Evidence</h2>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="cited" aria-selected="${evidenceTab === "cited"}">Cited<span class="ct">${cited.length}</span></button>
+      <button class="tab" role="tab" data-tab="all" aria-selected="${evidenceTab === "all"}">Full trace<span class="ct">${all.length}</span></button>
+    </div>
+    ${evHtml}
+
+    <h2>Remediation</h2>
+    <dl class="kv">
+      <dt>Recommended action</dt><dd>${escapeHtml(s.recommended_action || "—")}</dd>
+      <dt>Risk category</dt><dd>${riskBadge(s.risk_category)}</dd>
+      <dt>Approval</dt><dd>${approvalBadge(s.approval_status)}</dd>
+      <dt>Automated action</dt><dd class="mono">${s.remediation_action_type
+        ? escapeHtml(s.remediation_action_type)
+        : `<span style="color:var(--faint)">none — recommendation only</span>`}</dd>
+      <dt>Execution</dt><dd>${execBadge(s.execution_status)}</dd>
+      <dt>Verification</dt><dd>${verifyBadge(s.verification_result?.overall_status)}</dd>
+    </dl>
+
+    ${s.execution_detail ? `<h2>Execution output</h2><pre>${escapeHtml(s.execution_detail)}</pre>` : ""}
+
+    ${s.verification_result ? `
+      <h2>Verification replay</h2>
+      ${(s.verification_result.checks || []).map(c => `
+        <div class="ev">
+          <div class="ev-head">
+            <span class="tool">${escapeHtml(c.tool || "")}</span>
+            <span class="sig ${c.status === "resolved" ? "positive" : c.status === "still_anomalous" ? "negative" : "neutral"}">${escapeHtml(c.status || "")}</span>
+          </div>
+          <div class="q">${escapeHtml(c.query || "")}</div>
+          ${c.detail ? `<div class="rs">${escapeHtml(c.detail)}</div>` : ""}
+        </div>`).join("") || `<div class="none">No checks replayed.</div>`}` : ""}
+
+    <h2>Actions</h2>
+    <div class="btnrow">
+      <div class="with-ep">
+        <button id="btnApprove" ${s.approval_status !== "pending" ? "disabled" : ""}>Approve</button>
+        <span class="ep">POST /{id}/approval</span>
+      </div>
+      <div class="with-ep">
+        <button id="btnReject" class="danger" ${s.approval_status !== "pending" ? "disabled" : ""}>Reject</button>
+        <span class="ep">POST /{id}/approval</span>
+      </div>
+      <div class="with-ep">
+        <button id="btnExecute" class="ghost" ${(s.approval_status !== "approved" || !s.remediation_action_type) ? "disabled" : ""}>Run remediation</button>
+        <span class="ep">POST /{id}/execute</span>
+      </div>
+      <div class="with-ep">
+        <button id="btnVerify" class="ghost" ${s.approval_status !== "approved" ? "disabled" : ""}>Verify fix</button>
+        <span class="ep">POST /{id}/verify</span>
+      </div>
+      <div class="with-ep">
+        <button id="btnPostmortem" class="ghost">Postmortem</button>
+        <span class="ep">GET /{id}/postmortem</span>
+      </div>
+      <div class="with-ep">
+        <button id="btnExport" class="ghost">Save as fixture</button>
+        <span class="ep">POST /{id}/export_scenario</span>
+      </div>
     </div>
     <div id="actionError"></div>
+    <div id="postmortemOut"></div>
 
-    <div class="section-title">Suggested alert rules</div>
-    ${alertRules}
+    <h2>Suggested alerts</h2>
+    ${rules.length
+      ? rules.map(r => `
+        <div class="rule">
+          <div class="expr">${escapeHtml(r.expr)} <span style="color:var(--faint)">for ${escapeHtml(String(r.for))}</span></div>
+          <div class="why">${escapeHtml(r.rationale)}</div>
+        </div>`).join("")
+      : `<div class="none">No alert rule proposed — none of the cited evidence carried anomaly statistics.</div>`}
 
-    <div class="section-title">Cited evidence</div>
-    ${(state.cited_evidence || []).map(e => `
-      <div class="evidence-item cited">
-        <div class="tool">${e.tool}</div>
-        <div>${escapeHtml(e.query)}</div>
-        <div class="summary">${escapeHtml(e.result_summary || "")}</div>
-      </div>`).join("") || `<div class="empty">None</div>`}
+    <h2>Reasoning trace</h2>
+    <details>
+      <summary>${(s.reasoning_trace || []).length} steps</summary>
+      <pre>${escapeHtml((s.reasoning_trace || []).join("\n"))}</pre>
+    </details>
 
-    <div class="section-title">Full evidence trace</div>
-    ${evidenceHtml}
+    <h2>Requests this session</h2>
+    <div class="log" id="reqLog">${renderReqLog()}</div>
   `;
+
+  $("detail").querySelectorAll(".tab").forEach(t => {
+    t.addEventListener("click", () => {
+      evidenceTab = t.dataset.tab;
+      renderDetail(incidents[currentId]);
+    });
+  });
 
   $("btnApprove")?.addEventListener("click", () => decide(id, "approved"));
   $("btnReject")?.addEventListener("click", () => decide(id, "rejected"));
-  $("btnExecute")?.addEventListener("click", () => runAction(id, "execute"));
-  $("btnVerify")?.addEventListener("click", () => runAction(id, "verify"));
+  $("btnExecute")?.addEventListener("click", () => act(id, "execute", "Running remediation…"));
+  $("btnVerify")?.addEventListener("click", () => act(id, "verify", "Replaying cited evidence…"));
+  $("btnPostmortem")?.addEventListener("click", () => showPostmortem(id));
   $("btnExport")?.addEventListener("click", () => exportScenario(id));
 }
 
-async function decide(id, decision) {
-  try {
-    await api(`/incidents/${id}/approval`, {
-      method: "POST",
-      body: JSON.stringify({ decision }),
-    });
-    await refresh(id);
-  } catch (e) {
-    showActionError(e.message);
-  }
+function evCard(e, ix, cited) {
+  const sig = e.signal || (e.informative ? "positive" : "neutral");
+  return `<div class="ev ${cited ? "cited" : ""}">
+    <div class="ev-head">
+      ${ix >= 0 ? `<span class="ix">[${ix}]</span>` : ""}
+      <span class="tool">${escapeHtml(e.tool)}</span>
+      <span class="sig ${sig}">${escapeHtml(sig)}</span>
+    </div>
+    <div class="q">${escapeHtml(e.query || "")}</div>
+    <div class="rs">${escapeHtml(e.result_summary || "")}</div>
+  </div>`;
 }
 
-async function runAction(id, kind) {
+function meter(v, color) {
+  const pct = Math.max(0, Math.min(1, v)) * 100;
+  return `<div class="meter"><i style="width:${pct}%;background:${color}"></i></div>`;
+}
+const confColor = c => c >= 0.7 ? "var(--sage)" : c >= 0.5 ? "var(--ochre)" : "var(--clay)";
+const brColor = c => (c === "critical" || c === "high") ? "var(--clay)" : c === "medium" ? "var(--ochre)" : "var(--sage)";
+
+/* ── actions ── */
+async function decide(id, decision) {
   try {
-    await api(`/incidents/${id}/${kind}`, { method: "POST" });
+    await call(`/incidents/${id}/approval`, { method: "POST", body: { decision } });
+    tick("updated", `Remediation ${decision}.`);
     await refresh(id);
+  } catch (e) { actionError(e.message); }
+}
+
+async function act(id, kind, msg) {
+  tick("running", msg);
+  try {
+    await call(`/incidents/${id}/${kind}`, { method: "POST" });
+    await refresh(id);
+    const st = incidents[id];
+    tick("updated", kind === "verify"
+      ? `Verification: ${st.verification_result?.overall_status ?? "done"}`
+      : `Execution: ${st.execution_status ?? "done"}`);
+  } catch (e) { actionError(e.message); }
+}
+
+async function showPostmortem(id) {
+  const out = $("postmortemOut");
+  out.innerHTML = `<div class="note">Generating…</div>`;
+  try {
+    const r = await call(`/incidents/${id}/postmortem`);
+    out.innerHTML = `<pre style="margin-top:10px">${escapeHtml(r.postmortem_markdown || "")}</pre>`;
   } catch (e) {
-    showActionError(e.message);
+    out.innerHTML = `<div class="errbox">${escapeHtml(e.message)}</div>`;
   }
 }
 
 async function exportScenario(id) {
-  const scenarioId = prompt("scenario_id for this export (e.g. checkout_memory_leak_v1):");
+  const scenarioId = prompt("Fixture id for this case (e.g. checkout_memory_leak_v1):");
   if (!scenarioId) return;
   try {
-    await api(`/incidents/${id}/export_scenario`, {
-      method: "POST",
-      body: JSON.stringify({ scenario_id: scenarioId }),
+    const r = await call(`/incidents/${id}/export_scenario`, {
+      method: "POST", body: { scenario_id: scenarioId },
     });
-    alert(`Exported to app/fixtures/exported/${scenarioId}.json — review before adding to ALL_SCENARIOS.`);
-  } catch (e) {
-    showActionError(e.message);
-  }
+    tick("saved", `Written to ${r.exported_to} — review before adding to ALL_SCENARIOS.`);
+  } catch (e) { actionError(e.message); }
 }
 
 async function refresh(id) {
-  const state = await api(`/incidents/${id}`);
+  const state = await call(`/incidents/${id}`);
   incidents[id] = { ...incidents[id], ...state };
-  renderIncidentList();
+  renderCaseList();
   renderDetail(incidents[id]);
 }
 
-function showActionError(msg) {
-  $("actionError").innerHTML = `<div class="error-box">${escapeHtml(msg)}</div>`;
+function actionError(msg) {
+  const el = $("actionError");
+  if (el) el.innerHTML = `<div class="errbox">${escapeHtml(msg)}</div>`;
 }
+
+/* ── endpoint reference ── */
+const ENDPOINTS = [
+  ["GET",  "/scenarios",                      "Fixture scenarios available for replay"],
+  ["GET",  "/incidents/stream",               "Runs the pipeline, streaming each reasoning step"],
+  ["POST", "/incidents",                      "Same pipeline, blocking — returns only the final state"],
+  ["GET",  "/incidents/{id}",                 "Current stored state for one case"],
+  ["POST", "/incidents/{id}/approval",        "Record a human approve or reject decision"],
+  ["POST", "/incidents/{id}/execute",         "Run the mapper-selected action, approved cases only"],
+  ["POST", "/incidents/{id}/verify",          "Replay cited evidence to check the fix held"],
+  ["GET",  "/incidents/{id}/postmortem",      "Markdown postmortem assembled from the case record"],
+  ["POST", "/incidents/{id}/export_scenario", "Capture this case as a regression fixture"],
+  ["POST", "/admin/inject_fault",             "Set FAULT_MODE and recreate a container (token)"],
+  ["POST", "/admin/generate_traffic",         "Drive requests so an injected fault manifests (token)"],
+];
+
+$("btnHelp").addEventListener("click", () => {
+  $("detail").innerHTML = `
+    <h2>API surface</h2>
+    <p style="color:var(--muted);font-size:13px;max-width:70ch;margin:0 0 14px">
+      Every endpoint this dashboard talks to. Execution and fault injection are the only routes
+      that change anything outside the process — execution sits behind human approval, fault
+      injection behind a token.
+    </p>
+    <dl class="kv" style="grid-template-columns:60px 290px minmax(0,1fr);font-size:12.5px">
+      ${ENDPOINTS.map(([m, p, d]) => `
+        <dt class="mono" style="color:var(--steel)">${m}</dt>
+        <dd class="mono">${escapeHtml(p)}</dd>
+        <dd style="color:var(--muted)">${escapeHtml(d)}</dd>`).join("")}
+    </dl>
+    <h2>Requests this session</h2>
+    <div class="log" id="reqLog">${renderReqLog()}</div>
+    ${currentId ? `<button class="ghost" style="margin-top:16px" id="btnBack">Back to case ${escapeHtml(currentId)}</button>` : ""}
+  `;
+  $("btnBack")?.addEventListener("click", () => renderDetail(incidents[currentId]));
+});
 
 function escapeHtml(str) {
   if (str == null) return "";
-  return String(str)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 </script>
 </body>

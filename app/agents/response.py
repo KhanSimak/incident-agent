@@ -30,14 +30,14 @@ Confidence: {confidence}
 Respond ONLY with JSON, no other text:
 {{
   "recommended_action": "<one concrete, specific action>",
-  "risk_category": "auto_apply_safe|needs_approval|do_not_auto_apply",
+  "risk_category": "auto_apply_safe|needs_approval|do_not_apply",
   "reasoning": "<one sentence why this risk category>"
 }}
 
 risk_category guide:
 - auto_apply_safe: fully reversible, no user-facing impact if wrong (e.g. adding a log statement, a read-only diagnostic)
 - needs_approval: reversible but has real impact if wrong (e.g. a rollback, a config change, a restart)
-- do_not_auto_apply: irreversible, high-impact, or confidence is too low to act on (e.g. confidence < 0.5, or a schema/data migration)
+- do_not_apply: irreversible, high-impact, or confidence is too low to act on (e.g. confidence < 0.5, or a schema/data migration)
 """
 
 
@@ -64,7 +64,7 @@ async def respond_to_incident(state: IncidentState) -> dict:
                     "enum": [
                         "auto_apply_safe",
                         "needs_approval",
-                        "do_not_auto_apply"
+                        "do_not_apply"
                     ]
                 },
                 "reasoning": {
@@ -98,20 +98,40 @@ async def respond_to_incident(state: IncidentState) -> dict:
             logger.warning(f"Response step failed to parse ({e}), defaulting to safest option")
             parsed = {
                 "recommended_action": "Manual review required — automated recommendation failed to generate.",
-                "risk_category": "do_not_auto_apply",
+                "risk_category": "do_not_apply",
                 "reasoning": f"Parse failed ({e}), defaulting to the safest category.",
                 "action_type": None,   # NEW
             }
+
+    # Defensive: response_format is json_object, not json_schema, so the
+    # RESPONSE_SCHEMA below is advisory only — the model can return valid
+    # JSON that omits risk_category or invents a value outside the enum.
+    # Both used to KeyError / flow straight through to the executor. An
+    # unrecognised category falls back to the safest one, same bias as
+    # the parse-failure branch.
+    VALID_RISK = {"auto_apply_safe", "needs_approval", "do_not_apply"}
+    if parsed.get("risk_category") not in VALID_RISK:
+        logger.warning(
+            f"Unrecognised risk_category {parsed.get('risk_category')!r}; "
+            f"falling back to do_not_apply"
+        )
+        parsed["risk_category"] = "do_not_apply"
+    parsed.setdefault("recommended_action", "Manual review required.")
+    parsed.setdefault("reasoning", "")
 
     # HARD OVERRIDE, not a prompt suggestion: low confidence NEVER gets a
     # low-risk category, regardless of what the model proposed. Same
     # "don't trust self-reported judgment on the one thing that isn't
     # actually a judgment call" pattern as the redundant-retrieve guard
     # in your real Codebase Q&A agent.
-    if state["confidence"] is not None and state["confidence"] < 0.5 and parsed["risk_category"] != "do_not_auto_apply":
-        logger.info(f"Overriding risk_category to do_not_auto_apply — confidence {state['confidence']} is below 0.5")
-        parsed["risk_category"] = "do_not_auto_apply"
-        parsed["reasoning"] = " (risk category overridden to do_not_auto_apply — confidence too low to act on regardless of the action itself)"
+    if state["confidence"] is not None and state["confidence"] < 0.5 and parsed["risk_category"] != "do_not_apply":
+        logger.info(f"Overriding risk_category to do_not_apply — confidence {state['confidence']} is below 0.5")
+        parsed["risk_category"] = "do_not_apply"
+        parsed["reasoning"] = (
+            parsed.get("reasoning", "")
+            + " (risk category overridden to do_not_apply — confidence too "
+              "low to act on regardless of the action itself)"
+        )
     alert_rules = generate_prevention_rules(state) 
     return {
         "recommended_action": parsed["recommended_action"],

@@ -199,4 +199,3 @@ async def verify_incident(state: IncidentState) -> dict:
         overall = "still_anomalous"
 
     return {"overall_status": overall, "checks": checks}
-    3

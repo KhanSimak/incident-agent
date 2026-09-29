@@ -14,6 +14,45 @@ from app.tools.metrics import detect_anomaly, infer_metric_direction
 
 
 
+async def list_services_live(prometheus_url: str, timeout: float = 3.0) -> list[str]:
+    """
+    Every value Prometheus currently holds for the `service` label — i.e.
+    the services this deployment actually has telemetry for.
+
+    This is the catalog the agent validates its tool targets against, so
+    nothing needs a built-in list of service names. Returns [] rather
+    than raising when Prometheus is unreachable OR unresponsive; callers
+    treat an empty catalog as "unknown" and fall back to the naming
+    convention instead of blocking the investigation.
+
+    Deliberately a SHORT timeout (3s, not the 10s used for diagnostic
+    queries): this call gates triage for every incident, including ones
+    that end at triage and never touch the investigation loop at all, so
+    a hung Prometheus must fail fast here rather than stall the whole
+    pipeline for as long as a real diagnostic query is allowed to run.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{prometheus_url}/api/v1/label/service/values"
+            )
+    except httpx.RequestError:
+        # Covers unreachable (connection refused) AND unresponsive
+        # (ConnectTimeout/ReadTimeout are both RequestError subclasses) —
+        # a hang and a dead endpoint degrade the same way: empty catalog.
+        return []
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return []
+
+    if data.get("status") != "success":
+        return []
+
+    return sorted({str(v).strip().lower() for v in data.get("data", []) if v})
+
+
 async def discover_metrics(prometheus_url: str, service: str) -> dict:
     """
     Discover metric names that actually belong to the requested service.

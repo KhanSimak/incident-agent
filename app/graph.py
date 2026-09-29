@@ -66,10 +66,13 @@ async def run_pipeline(incident_id: str, description: str, scenario_id: str | No
         "execution_status": "not_executed",
         "execution_detail": None,
         "execution_started_at": None,
+        "verification_result": None,
 
         "severity": None,
         "category": None,
         "escalate": None,
+        "affected_service": None,   # resolved and pinned by the triage node
+        "known_services": [],       # discovered by the triage node
         "evidence": [],
         "reasoning_trace": [],
         "iteration": 0,
@@ -102,6 +105,8 @@ async def stream_pipeline(incident_id: str, description: str, scenario_id: str |
         "description": description,
         "scenario_id": scenario_id,
         "severity": None, "category": None, "escalate": None,
+        "affected_service": None,   # resolved and pinned by the triage node
+        "known_services": [],       # discovered by the triage node
         "evidence": [], "reasoning_trace": [], "iteration": 0,
         "next_action": None, "action_input": None, "pending_citations": [],
         "root_cause_hypothesis": None, "confidence": None, "cited_evidence_indices": [],
@@ -109,6 +114,7 @@ async def stream_pipeline(incident_id: str, description: str, scenario_id: str |
         "approval_status": None, "verification_result": None,
         "suggested_alert_rules": [], "remediation_action_type": None,
         "execution_status": "not_executed", "execution_detail": None,
+        "execution_started_at": None,
     }
 
     last_trace_len = 0

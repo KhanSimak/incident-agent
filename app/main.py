@@ -7,6 +7,7 @@ import json as _json
 from fastapi.responses import StreamingResponse
 from app.graph import run_pipeline, stream_pipeline
 
+from fastapi import Depends, Header
 from app.fixtures import ALL_SCENARIOS
 from app.config import get_settings
 from app.verification.verify import verify_incident   # NEW
@@ -17,6 +18,7 @@ from app.testing.fault_injector import inject_fault, generate_traffic, VALID_FAU
 
 settings = get_settings()
 _incident_store: dict[str, dict] = {} 
+
 
 app = FastAPI(
     title="Incident Investigation Agent — teaching scaffold"
@@ -38,6 +40,11 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+
+
+def require_admin_token(x_admin_token: str | None = Header(default=None)):
+    if not settings.admin_token or x_admin_token != settings.admin_token:
+        raise HTTPException(403, "Invalid or missing admin token")
 class IncidentRequest(BaseModel):
     description: str
     scenario_id: str | None = None
@@ -239,7 +246,7 @@ class TrafficRequest(BaseModel):
 
 
 @app.post("/admin/inject_fault")
-async def admin_inject_fault(req: FaultInjectRequest):
+async def admin_inject_fault(req: FaultInjectRequest, _=Depends(require_admin_token)):
     if settings.data_source != "live":
         raise HTTPException(400, "Fault injection only applies in live mode.")
     result = inject_fault(req.service, req.fault_mode)
@@ -249,7 +256,7 @@ async def admin_inject_fault(req: FaultInjectRequest):
 
 
 @app.post("/admin/generate_traffic")
-async def admin_generate_traffic(req: TrafficRequest):
+async def admin_generate_traffic(req: TrafficRequest, _=Depends(require_admin_token)):
     if settings.data_source != "live":
         raise HTTPException(400, "Traffic generation only applies in live mode.")
     return await generate_traffic(req.service, req.count, req.delay_ms)

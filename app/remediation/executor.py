@@ -19,10 +19,15 @@ import logging
 import subprocess
 import time
 from app.state import IncidentState
+from app.config import REPO_ROOT
 
 logger = logging.getLogger(__name__)
 
-INFRA_DIR = r"C:\incident-agent\infra"
+# Derived from this file's own location, not a hardcoded absolute path.
+# This used to be r"C:\incident-agent\infra", which meant every compose
+# call ran with a bad cwd on any machine that was not that one Windows
+# checkout.
+INFRA_DIR = str(REPO_ROOT / "infra")
 
 # service name (as used throughout state/evidence) -> compose env var
 # that carries its FAULT_MODE. Only services with a FAULT_MODE var in
@@ -38,13 +43,15 @@ SUPPORTED_ACTION_TYPES = {"restart_service", "reset_fault_mode"}
 
 def _target_service(state: IncidentState) -> str | None:
     """
-    Which service to act on. Uses the same primary-service extraction
-    investigation.py already relies on (the incident description's own
-    "<name>-service" token) rather than trusting any fixture/ground-truth
-    lookup — see investigation.py's _extract_primary_service for why.
+    Which service to act on. Uses the service PINNED by triage
+    (state["affected_service"]) directly — not resolve_affected_service,
+    which can re-derive from the description/catalog and potentially
+    disagree with the value the investigation actually ran against.
+    The pinned value is what the evidence was gathered for, so it's the
+    only thing the executor may act on; if it's unset, fail closed
+    rather than guess.
     """
-    from app.agents.investigation import _extract_primary_service
-    return _extract_primary_service(state["description"])
+    return state.get("affected_service")
 
 
 def _run_compose(args: list[str], env: dict | None = None) -> tuple[bool, str]:

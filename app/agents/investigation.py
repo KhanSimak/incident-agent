@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import re
@@ -133,16 +134,29 @@ async def _call_llm_with_fallback(groq_call, openrouter_call, label: str):
 
 MAX_ITERATIONS = 8
 
-REASONING_PROMPT = """You are investigating a production incident.
+REASONING_PROMPT = """You are investigating a live software incident.
 
 Incident: {description}
 Category (from triage): {category}
-Service named in description: {service}
+AFFECTED SERVICE: {service}
+
+SERVICE TARGETING RULE:
+The affected service above is the target for discover_metrics,
+query_logs and get_recent_deploys. Use that exact string.
+
+Never use an environment, cluster or platform name — "production",
+"prod", "staging", "infra", "system" and the like are NOT services and
+will be rejected. If the affected service shows as NOT RESOLVED, do not
+substitute a placeholder: investigate with a tool that does not require
+a service name, or state that the target is unknown.
+
 IMPORTANT:
-The triage category is only a hypothesis, not ground truth. The named
-service (if any) is only what the description happens to mention, not
-a confirmed diagnosis — the fault could be in a dependency instead.
-Do not assume the category or named service is the root cause.
+The triage category is only a hypothesis, not ground truth. The
+affected service is where the incident was REPORTED, not a confirmed
+diagnosis — the fault could be in a dependency instead. Investigate the
+affected service first, and move to a dependency only when evidence
+explicitly implicates one.
+Do not assume the category or affected service is the root cause.
 Use the incident description and gathered evidence to determine
 what actually happened.
 
@@ -695,7 +709,79 @@ def _already_gathered(state: IncidentState, tool: str, query: str) -> bool:
 DIAGNOSTIC_TOOLS = {"query_metrics", "query_logs", "get_recent_deploys"}
 
 
-def _extract_primary_service(description: str) -> str | None:
+# ─────────────────────────────────────────────────────────────────────
+# Service identity
+#
+# There is no hardcoded list of service names anywhere in here. The set
+# of real services is DISCOVERED from whichever backend this run is
+# actually using — Prometheus `service` label values and the live log
+# directory in live mode, the scenario's own logs/topology in fixture
+# mode — and cached on state as `known_services`. That keeps this
+# working for any deployment, and it is what rejects a target like
+# "production": Prometheus has no series labelled service="production",
+# so it simply isn't in the catalog. It is not on a banned-words list.
+# ─────────────────────────────────────────────────────────────────────
+
+# The naming convention this codebase's own tool schemas, fixtures and
+# compose file already share. Used only as a FALLBACK shape check for
+# when no catalog could be discovered (Prometheus unreachable and no log
+# files yet) — never as a source of names.
+SERVICE_NAME_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*-service")
+
+
+def canonicalize_service_token(token: str | None) -> str | None:
+    """
+    Fold one loose service-ish token into the canonical spelling used by
+    Prometheus labels, log filenames and compose service names:
+
+        "checkout_service" / "Checkout Service" -> "checkout-service"
+
+    This ONLY normalizes spelling. It does not decide whether the result
+    is a real service — that is `is_known_service`'s job, against the
+    discovered catalog.
+    """
+    if not token:
+        return None
+
+    cleaned = token.strip().strip("\"'`.,;:()[]{}").lower()
+    cleaned = re.sub(r"[\s_]+", "-", cleaned)
+
+    return cleaned or None
+
+
+def is_known_service(token: str | None, catalog: set[str] | None) -> bool:
+    """
+    Is this a real service target?
+
+    With a discovered catalog, membership in it is the only test — that
+    is the actual ground truth for what exists. Without one (nothing
+    discoverable yet), fall back to the shared naming convention so the
+    agent still functions rather than blocking every action.
+    """
+    name = canonicalize_service_token(token)
+    if not name:
+        return False
+
+    if catalog:
+        return name in catalog
+
+    return bool(SERVICE_NAME_PATTERN.fullmatch(name))
+
+
+def _catalog(state: IncidentState) -> set[str]:
+    """The service catalog discovered for this incident, as a set."""
+    return {
+        c for c in (
+            canonicalize_service_token(s)
+            for s in (state.get("known_services") or [])
+        ) if c
+    }
+
+
+def _extract_primary_service(
+    description: str,
+    catalog: set[str] | None = None,
+) -> str | None:
     """
     Best-effort extraction of the affected service name from the
     incident's own free-text description — e.g. "payment-service is
@@ -703,18 +789,174 @@ def _extract_primary_service(description: str) -> str | None:
 
     Deliberately NOT a lookup against scenario/fixture ground truth
     (ALL_SCENARIOS[...].primary_service): this agent is meant to
-    investigate any incident, not just the 3 predefined fixture
-    scenarios, and a real incident report doesn't come pre-labeled with
-    which service is actually at fault — that's what investigation is
-    for. This only reads the "<n>-service" naming convention already
-    used throughout this codebase's own tool schemas and fixtures, from
-    whatever text the incident description happens to contain. If no
-    such token is present, returns None rather than guessing — callers
-    must treat that as "unknown," not as license to fall back to a
-    ground-truth lookup.
+    investigate any incident, not just the predefined fixture scenarios,
+    and a real incident report doesn't come pre-labeled with which
+    service is actually at fault — that's what investigation is for. If
+    nothing service-shaped is present, returns None rather than guessing;
+    callers must treat that as "unknown", not as license to substitute a
+    placeholder.
+
+    Reads three spellings, in order of how explicit they are, and matches
+    loose ones against the DISCOVERED catalog rather than any built-in
+    list. That tolerance is the fix for the reported bug: a report typed
+    as "checkout service memory climbing" used to extract nothing, which
+    left the reasoning prompt with "not named in the description" and let
+    the model substitute the word "production" from the prompt's own
+    opening line.
     """
-    match = re.search(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*-service)\b", description, re.IGNORECASE)
-    return match.group(1).lower() if match else None
+    if not description:
+        return None
+
+    # 1. An explicit convention-shaped token: "checkout-service",
+    #    "checkout_service".
+    for raw in re.findall(
+        r"\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*[-_]service\b",
+        description,
+        re.IGNORECASE,
+    ):
+        name = canonicalize_service_token(raw)
+        if name and is_known_service(name, catalog):
+            return name
+
+    # 2. The same thing written with a space: "checkout service".
+    for raw in re.findall(r"\b([a-z][a-z0-9]*)\s+service\b", description, re.IGNORECASE):
+        name = canonicalize_service_token(f"{raw}-service")
+        if name and is_known_service(name, catalog):
+            return name
+
+    # 3. A bare catalog name or its distinguishing prefix: "checkout
+    #    memory climbing", "auth gateway throwing 401s". Matched with a
+    #    flexible separator so a hyphenated catalog entry is still found
+    #    when it was typed with spaces or underscores. Longest first, so
+    #    a more specific name wins over a prefix of it.
+    for candidate in sorted(catalog or (), key=len, reverse=True):
+        stem = (
+            candidate.rsplit("-service", 1)[0]
+            if candidate.endswith("-service")
+            else candidate
+        )
+        for needle in (candidate, stem):
+            if not needle:
+                continue
+            loose = r"[-_\s]+".join(re.escape(part) for part in needle.split("-"))
+            if re.search(rf"\b{loose}\b", description, re.IGNORECASE):
+                return candidate
+
+    return None
+
+
+def resolve_affected_service(state: IncidentState) -> str | None:
+    """
+    THE single source of truth for "which service is this incident about".
+
+    Resolution order:
+      1. state["affected_service"] — pinned once by triage and propagated
+         through the graph, so every iteration of the ReAct loop agrees
+         instead of re-deriving (and re-losing) it from free text.
+      2. The incident description, matched against the discovered catalog.
+      3. Fixture mode only: the scenario's primary_service, which the
+         caller explicitly selected, so it is stated intent rather than
+         ground-truth leakage.
+
+    Returns None when genuinely unknown. Callers must not substitute a
+    placeholder.
+    """
+    catalog = _catalog(state)
+
+    pinned = canonicalize_service_token(state.get("affected_service"))
+    if pinned and is_known_service(pinned, catalog):
+        return pinned
+
+    from_description = _extract_primary_service(state.get("description", ""), catalog)
+    if from_description:
+        return from_description
+
+    if settings.data_source != "live":
+        scenario_id = state.get("scenario_id")
+        scenario = ALL_SCENARIOS.get(scenario_id) if scenario_id else None
+        if scenario:
+            return canonicalize_service_token(scenario.primary_service)
+
+    return None
+
+
+# Tools whose action_input names a service. query_metrics is excluded:
+# its input is PromQL, already constrained by the discovered-metric
+# check, and a valid PromQL expression may legitimately reference other
+# label values.
+SERVICE_TARGETED_TOOLS = {
+    "discover_metrics",
+    "query_logs",
+    "get_recent_deploys",
+    "get_service_dependents",
+}
+
+
+def _action_target_service(action: str, action_input: str) -> str | None:
+    """
+    Pull the service the action is pointed at out of that tool's own
+    action_input shape. Returns None when no target is expressed (e.g. a
+    malformed log query), which callers treat as "nothing to check here"
+    — malformed input is _valid_log_query's job, not this function's.
+    """
+    raw = (action_input or "").strip()
+    if not raw:
+        return None
+
+    if action == "query_logs":
+        match = re.fullmatch(r'\{service="([^"]*)"\}\s*\|=\s*"([^"]*)"', raw)
+        return match.group(1) if match else None
+
+    # discover_metrics / get_recent_deploys / get_service_dependents all
+    # take a bare service name.
+    return raw
+
+
+def _evidenced_dependency(state: IncidentState, target: str) -> bool:
+    """
+    Was `target` established as a dependency of the affected service by
+    an actual get_service_dependents call in THIS incident's evidence?
+
+    The catalog is pinned once at triage and never re-queried — refreshing
+    it mid-investigation would mean re-hitting Prometheus/log discovery
+    on every loop iteration for a set that rarely changes. But a
+    dependency the investigation legitimately pivots to (the
+    downstream_dependency fixture's whole point — cart-service reports
+    the symptom, inventory-db is the real cause) must not be blocked
+    just because it wasn't the incident's own reported service. This is
+    the actual implementation of the bypass validate_action's error
+    message already promised ("unless evidence explicitly implicates a
+    dependency") but never carried out.
+    """
+    target = canonicalize_service_token(target)
+    if not target:
+        return False
+
+    for e in state.get("evidence") or []:
+        if e.get("tool") != "get_service_dependents" or not e.get("informative"):
+            continue
+
+        summary = e.get("result_summary", "")
+        match = re.search(
+            r"depends_on=(\[[^\]]*\]),\s*depended_on_by=(\[[^\]]*\])",
+            summary,
+        )
+        if not match:
+            continue
+
+        try:
+            depends_on = ast.literal_eval(match.group(1))
+            depended_on_by = ast.literal_eval(match.group(2))
+        except (ValueError, SyntaxError):
+            continue
+
+        neighbours = {
+            canonicalize_service_token(s) for s in [*depends_on, *depended_on_by]
+        }
+        if target in neighbours:
+            return True
+
+    return False
 
 
 def validate_action(state: IncidentState, action: str, action_input: str) -> tuple[bool, str]:
@@ -737,19 +979,47 @@ def validate_action(state: IncidentState, action: str, action_input: str) -> tup
     # scenarios. When no service can be identified from the description,
     # we do NOT block: better to let the model investigate freely than
     # to guess and wrongly constrain it.
-    if action == "query_logs":
-        expected_service = _extract_primary_service(state["description"])
-        match = re.fullmatch(
-            r'\{service="([^"]+)"\} \|= "([^"]+)"',
-            action_input.strip(),
-        )
-        if expected_service and match and match.group(1) != expected_service:
+    # This applies to EVERY tool that takes a service as its target, not
+    # just query_logs — the reported bug was discover_metrics
+    # ("production") sailing through precisely because only query_logs
+    # was checked here.
+    if action in SERVICE_TARGETED_TOOLS:
+        catalog = _catalog(state)
+        expected_service = resolve_affected_service(state)
+        target = _action_target_service(action, action_input)
+
+        # A target that isn't a real service is refused even when the
+        # affected service could not be resolved. This is what stops
+        # "production": it is absent from the discovered catalog, not
+        # present on any banned-words list.
+        if target is not None and not is_known_service(target, catalog):
             return False, (
-                f"Blocked: query_logs targeted service "
-                f"'{match.group(1)}', but the incident description "
-                f"names '{expected_service}'. Investigate the named "
-                f"service first unless evidence explicitly implicates "
-                f"a dependency."
+                f"Blocked: {action} targeted '{target}', which is not a "
+                f"known service"
+                + (
+                    f" (known: {', '.join(sorted(catalog))})"
+                    if catalog
+                    else " and does not match the service naming convention"
+                )
+                + ". "
+                + (
+                    f"Target the affected service '{expected_service}' instead."
+                    if expected_service
+                    else "Target a real service name."
+                )
+            )
+
+        if (
+            expected_service
+            and target
+            and canonicalize_service_token(target) != expected_service
+            and not _evidenced_dependency(state, target)
+        ):
+            return False, (
+                f"Blocked: {action} targeted service '{target}', but "
+                f"this incident concerns '{expected_service}'. "
+                f"Investigate the affected service first unless "
+                f"evidence explicitly implicates a dependency."
             )
 
     evidence = state["evidence"]
@@ -1107,6 +1377,40 @@ def _parse_decision(raw: str, state: IncidentState) -> dict:
                 f"invalid query_logs format: {parsed.get('action_input', '')}"
             )
 
+    # Repair a service-targeted action that points at something outside
+    # the discovered catalog (an environment name, a typo) rather than
+    # burning an iteration on a validate_action block. Only ever rewrites
+    # TOWARD the resolved affected service, and never rewrites a target
+    # that IS a known service and was legitimately reached via
+    # get_service_dependents evidence — that's the model correctly
+    # pivoting to a dependency, not a mistake to correct.
+    if parsed["action"] in SERVICE_TARGETED_TOOLS:
+        resolved = resolve_affected_service(state)
+        target = _action_target_service(parsed["action"], parsed.get("action_input", ""))
+
+        if (
+            resolved
+            and target is not None
+            and canonicalize_service_token(target) != resolved
+            and not (
+                is_known_service(target, _catalog(state))
+                and _evidenced_dependency(state, target)
+            )
+        ):
+            if parsed["action"] == "query_logs":
+                parsed["action_input"] = re.sub(
+                    r'^\{service="[^"]*"\}',
+                    f'{{service="{resolved}"}}',
+                    parsed["action_input"].strip(),
+                )
+            else:
+                parsed["action_input"] = resolved
+
+            logger.warning(
+                f"Rewrote {parsed['action']} target {target!r} -> "
+                f"{resolved!r} (affected service)"
+            )
+
     if (
         parsed["action"] == "query_metrics"
         and state["evidence"]
@@ -1119,7 +1423,7 @@ def _parse_decision(raw: str, state: IncidentState) -> dict:
         # and let validate_action's generic "unknown metric" block (which
         # doesn't require knowing a service name) give the model
         # corrective feedback instead.
-        inferred_service = _extract_primary_service(state["description"])
+        inferred_service = resolve_affected_service(state)
         if inferred_service:
             parsed["action"] = "discover_metrics"
             parsed["action_input"] = inferred_service
@@ -1211,7 +1515,7 @@ async def reasoning_node(state: IncidentState) -> dict:
     prompt = REASONING_PROMPT.format(
         description=state["description"],
         category=state["category"],
-        service=_extract_primary_service(state["description"]) or "not named in the description",
+        service=resolve_affected_service(state) or "NOT RESOLVED — identify it from evidence; do not invent one",
         num_evidence=len(state["evidence"]),
         evidence_summary=_summarize_evidence(state["evidence"]),
         sufficiency_note=sufficiency_note,
